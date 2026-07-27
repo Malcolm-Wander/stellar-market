@@ -64,7 +64,14 @@ router.get(
     const { page, limit, jobId, status } = req.query as any;
     const skip = (page - 1) * limit;
 
-    const where: any = {};
+    const where: any = {
+      job: {
+        OR: [
+          { clientId: req.userId },
+          { freelancerId: req.userId },
+        ],
+      },
+    };
     if (jobId) where.jobId = jobId;
     if (status) where.status = status;
 
