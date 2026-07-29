@@ -213,14 +213,14 @@ router.post(
         ...attachment,
         sizeFormatted: formatFileSize(attachment.size),
       });
-    } catch (error: any) {
+    } catch (error) {
       // Clean up file if it was uploaded
       if (req.file && fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);
       }
 
       // Handle multer errors
-      if (error.code === "LIMIT_FILE_SIZE") {
+      if ((error as { code?: string })?.code === "LIMIT_FILE_SIZE") {
         return res.status(400).json({
           error: `File too large. Maximum size is ${formatFileSize(MAX_FILE_SIZE)}`,
         });
@@ -461,7 +461,7 @@ router.get(
       });
 
       res.json({
-        attachments: attachments.map((att: any) => ({
+        attachments: attachments.map((att) => ({
           ...att,
           sizeFormatted: formatFileSize(att.size),
         })),

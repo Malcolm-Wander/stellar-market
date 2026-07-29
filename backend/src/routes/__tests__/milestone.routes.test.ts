@@ -46,11 +46,11 @@ jest.mock("@prisma/client", () => {
   };
 
   return {
-    PrismaClient: jest.fn(() => mockPrisma) as any,
+    PrismaClient: jest.fn(() => mockPrisma),
     NotificationType: {
       MILESTONE_SUBMITTED: "MILESTONE_SUBMITTED",
       MILESTONE_APPROVED: "MILESTONE_APPROVED",
-    } as any,
+    },
   };
 });
 
@@ -84,7 +84,24 @@ const milestoneMock = prismaMock.milestone;
 import { NotificationService } from "../../services/notification.service";
 import { ContractService } from "../../services/contract.service";
 
-const prismaMock = new PrismaClient() as any;
+const prismaMock = new PrismaClient() as unknown as {
+  job: { findUnique: jest.Mock };
+  milestone: {
+    findUnique: jest.Mock;
+    findMany: jest.Mock;
+    count: jest.Mock;
+    create: jest.Mock;
+    update: jest.Mock;
+    delete: jest.Mock;
+  };
+  attachment: {
+    findUnique: jest.Mock;
+    findMany: jest.Mock;
+    create: jest.Mock;
+    delete: jest.Mock;
+  };
+  user: { findUnique: jest.Mock };
+};
 const jobMock = prismaMock.job;
 const milestoneMock = prismaMock.milestone;
 const userMock = prismaMock.user;

@@ -1,4 +1,4 @@
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import request from "supertest";
 import userRouter from "../user.routes";
 import { ReputationCacheService } from "../../services/reputation-cache.service";
@@ -30,14 +30,23 @@ jest.mock("@prisma/client", () => {
   };
 });
 
-const { __mockUser: mockUser } = require("@prisma/client");
+interface MockUserModel {
+  findMany: jest.Mock;
+  count: jest.Mock;
+}
+
+const { __mockUser: mockUser } = jest.requireMock("@prisma/client") as unknown as {
+  __mockUser: MockUserModel;
+};
 
 jest.mock("../../middleware/auth", () => ({
   authenticate: jest.fn((req, res, next) => next()),
 }));
 
 jest.mock("../../middleware/validation", () => ({
-  validate: jest.fn(() => (req: any, res: any, next: any) => next()),
+  validate: jest.fn(
+    () => (req: Request, res: Response, next: NextFunction) => next(),
+  ),
 }));
 
 jest.mock("../../lib/logger", () => ({

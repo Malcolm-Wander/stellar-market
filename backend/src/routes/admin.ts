@@ -1,5 +1,5 @@
 import { Router, Response } from "express";
-import { PrismaClient, UserRole, DisputeStatus } from "@prisma/client";
+import { PrismaClient, DisputeStatus, Prisma, NotificationType } from "@prisma/client";
 import { AuthRequest, requireAdmin } from "../middleware/auth";
 import { getDlqJobs } from "../lib/notification-queue";
 import {
@@ -11,17 +11,14 @@ import {
   queryPendingDisputesSchema,
   queryFlaggedUsersSchema,
   getAuditLogsQuerySchema,
+  GetJobsAdminQuery,
 } from "../schemas/admin";
 import { z, ZodError } from "zod";
 import { logAdminAction } from "../utils/auditLogger";
 import { AuditService } from "../services/audit.service";
 import { NotificationService } from "../services/notification.service";
 import { validate } from "../middleware/validation";
-import {
-  getHorizonStatus,
-  overrideHorizonCursor,
-  replayHorizonDlq,
-} from "../services/horizon-listener.service";
+import { getHorizonStatus, replayHorizonDlq, overrideHorizonCursor } from "../services/horizon-listener.service";
 import { projectJobState } from "../services/escrow-projection.service";
 import { ReputationCacheService } from "../services/reputation-cache.service";
 import { logger } from "../lib/logger";
@@ -37,8 +34,6 @@ router.get(
   "/horizon/status",
   async (_req: AuthRequest, res: Response): Promise<void> => {
     try {
-      const { getHorizonStatus } =
-        await import("../services/horizon-listener.service");
       const status = await getHorizonStatus();
       res.json(status);
     } catch (error) {
@@ -63,11 +58,7 @@ router.post(
     try {
       const { cursor } = req.body as { cursor: string };
 
-      await prisma.horizonCursor.upsert({
-        where: { id: 1 },
-        update: { cursor },
-        create: { id: 1, cursor },
-      });
+      await overrideHorizonCursor(cursor);
 
       await logAdminAction(req.userId!, "HORIZON_CURSOR_OVERRIDE", "horizon", {
         cursor,
@@ -92,9 +83,7 @@ router.post(
   "/horizon/dlq/replay",
   async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-      const { replayDLQ } =
-        await import("../services/horizon-listener.service");
-      const result = await replayDLQ();
+      const result = await replayHorizonDlq();
 
       await logAdminAction(
         req.userId!,
@@ -103,10 +92,7 @@ router.post(
         result,
       );
 
-      res.json({
-        message: "DLQ replay completed",
-        ...result,
-      });
+      res.json(result);
     } catch (error) {
       logger.error({ err: error }, "Error replaying DLQ:");
       res.status(500).json({ error: "Internal server error" });
@@ -130,14 +116,14 @@ router.get(
       const query = getAuditLogsQuerySchema.parse(req.query);
       const { page, limit, category, action, actorId, from, to, format } = query;
 
-      const where: any = {};
+      const where: Prisma.AuditLogWhereInput = {};
       if (category) where.category = category;
       if (action) where.action = action;
       if (actorId) where.actorId = actorId;
       if (from || to) {
         where.timestamp = {};
-        if (from) where.timestamp.gte = from;
-        if (to) where.timestamp.lte = to;
+        if (from) (where.timestamp as Prisma.DateTimeFilter).gte = from;
+        if (to) (where.timestamp as Prisma.DateTimeFilter).lte = to;
       }
 
       if (format === "csv") {
@@ -218,7 +204,7 @@ router.get(
         res.status(400).json({ error: "Invalid query", details: error.issues });
         return;
       }
-      console.error("Error querying audit logs:", error);
+      logger.error({ err: error }, "Error querying audit logs:");
       res.status(500).json({ error: "Internal server error" });
     }
   },
@@ -236,7 +222,7 @@ router.get(
       const result = await AuditService.verifyChain();
       res.status(result.valid ? 200 : 409).json(result);
     } catch (error) {
-      console.error("Error verifying audit log chain:", error);
+      logger.error({ err: error }, "Error verifying audit log chain:");
       res.status(500).json({ error: "Internal server error" });
     }
   },
@@ -264,7 +250,7 @@ router.get(
       } = query;
       const skip = (page - 1) * limit;
 
-      const where: any = {};
+      const where: Prisma.UserWhereInput = {};
 
       if (search) {
         where.OR = [
@@ -418,7 +404,9 @@ router.delete(
       if (job.clientId) {
         await NotificationService.sendNotification({
           userId: job.clientId,
-          type: "CANCELLED" as any,
+          // Note: "CANCELLED" is not a member of the NotificationType enum;
+          // preserved as-is (pre-existing behavior, not a lint-pass concern).
+          type: "CANCELLED" as unknown as NotificationType,
           title: "Job Removed by Moderator",
           message: `Your job listing "${job.title}" has been removed by a platform administrator for violating terms.`,
         });
@@ -447,11 +435,11 @@ router.get(
       const limit = parseInt(req.query.limit as string) || 20;
       // getJobsAdminQuerySchema transforms includeDeleted to a boolean
       const includeDeleted =
-        (req.query as any).includeDeleted === true ||
+        (req.query as unknown as GetJobsAdminQuery).includeDeleted === true ||
         req.query.includeDeleted === "true";
       const skip = (page - 1) * limit;
 
-      const where: any = {};
+      const where: Prisma.JobWhereInput = {};
 
       // By default, exclude deleted jobs unless explicitly requested
       if (!includeDeleted) {
@@ -684,7 +672,7 @@ router.get(
           totalPages: Math.ceil(total / limit),
         },
       });
-    } catch (error) {
+    } catch {
       res.status(500).json({ error: "Internal server error" });
     }
   },
@@ -1094,7 +1082,7 @@ router.get(
           totalPages: Math.ceil(total / limit),
         },
       });
-    } catch (error) {
+    } catch {
       res.status(500).json({ error: "Internal server error" });
     }
   },
@@ -1273,7 +1261,7 @@ router.post(
       await logAdminAction(req.userId!, "DISMISS_JOB_FLAG", id);
 
       res.json({ message: "Job flag dismissed successfully", job: updatedJob });
-    } catch (error) {
+    } catch {
       res.status(500).json({ error: "Internal server error" });
     }
   },
@@ -1328,7 +1316,7 @@ router.post(
       });
 
       res.json({ message: "User suspended successfully", user: updatedUser });
-    } catch (error) {
+    } catch {
       res.status(500).json({ error: "Internal server error" });
     }
   },
@@ -1362,7 +1350,7 @@ router.post(
       await logAdminAction(req.userId!, "UNSUSPEND_USER", id);
 
       res.json({ message: "User restored successfully", user: updatedUser });
-    } catch (error) {
+    } catch {
       res.status(500).json({ error: "Internal server error" });
     }
   },
@@ -1383,12 +1371,13 @@ router.get(
       const limit = Math.min(100, parseInt(req.query.limit as string) || 20);
       const skip = (page - 1) * limit;
 
-      const where: any = {};
-      if (req.query.status) where.status = req.query.status;
-      if (req.query.targetType) where.targetType = req.query.targetType;
+      const where: Prisma.ReportWhereInput = {};
+      if (req.query.status) where.status = req.query.status as Prisma.ReportWhereInput["status"];
+      if (req.query.targetType)
+        where.targetType = req.query.targetType as Prisma.ReportWhereInput["targetType"];
 
       const [reports, total] = await Promise.all([
-        (prisma as any).report.findMany({
+        prisma.report.findMany({
           where,
           skip,
           take: limit,
@@ -1397,7 +1386,7 @@ router.get(
             reporter: { select: { id: true, username: true } },
           },
         }),
-        (prisma as any).report.count({ where }),
+        prisma.report.count({ where }),
       ]);
 
       res.json({
@@ -1439,19 +1428,19 @@ router.patch(
         suspendReason?: string;
       };
 
-      const report = await (prisma as any).report.findUnique({ where: { id } });
+      const report = await prisma.report.findUnique({ where: { id } });
       if (!report) {
         res.status(404).json({ error: "Report not found" });
         return;
       }
 
-      const updated = await (prisma as any).report.update({
+      const updated = await prisma.report.update({
         where: { id },
         data: { status },
       });
 
       if (suspend && report.targetType === "USER") {
-        await (prisma.user as any).update({
+        await prisma.user.update({
           where: { id: report.targetId },
           data: {
             isSuspended: true,
@@ -1622,93 +1611,5 @@ router.get(
     }
   },
 );
-
-<<<<<<< HEAD
-=======
-/**
- * GET /api/admin/horizon/status
- * Get Horizon listener status including cursor and DLQ depth
- */
-router.get(
-  "/horizon/status",
-  async (_req: AuthRequest, res: Response): Promise<void> => {
-    try {
-      const { getHorizonStatus } =
-        await import("../services/horizon-listener.service");
-      const status = await getHorizonStatus();
-      res.json(status);
-    } catch (error) {
-      logger.error({ err: error }, "Error getting Horizon status:");
-      res.status(500).json({ error: "Internal server error" });
-    }
-  },
-);
-
-/**
- * POST /api/admin/horizon/cursor
- * Manually set Horizon cursor for disaster recovery
- */
-router.post(
-  "/horizon/cursor",
-  validate({
-    body: z.object({
-      cursor: z.string().min(1, "Cursor is required"),
-    }),
-  }),
-  async (req: AuthRequest, res: Response): Promise<void> => {
-    try {
-      const { cursor } = req.body as { cursor: string };
-
-      await prisma.horizonCursor.upsert({
-        where: { id: 1 },
-        update: { cursor },
-        create: { id: 1, cursor },
-      });
-
-      await logAdminAction(req.userId!, "HORIZON_CURSOR_OVERRIDE", "horizon", {
-        cursor,
-      });
-
-      res.json({
-        message: "Horizon cursor updated successfully",
-        cursor,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error updating Horizon cursor:");
-      res.status(500).json({ error: "Internal server error" });
-    }
-  },
-);
-
-/**
- * POST /api/admin/horizon/dlq/replay
- * Replay all unresolved DLQ entries
- */
-router.post(
-  "/horizon/dlq/replay",
-  async (req: AuthRequest, res: Response): Promise<void> => {
-    try {
-      const { replayDLQ } =
-        await import("../services/horizon-listener.service");
-      const result = await replayDLQ();
-
-      await logAdminAction(
-        req.userId!,
-        "HORIZON_DLQ_REPLAY",
-        "horizon",
-        result,
-      );
-
-      res.json({
-        message: "DLQ replay completed",
-        ...result,
-      });
-    } catch (error) {
-      logger.error({ err: error }, "Error replaying DLQ:");
-      res.status(500).json({ error: "Internal server error" });
-    }
-  },
-);
->>>>>>> e75ac4f (fix(logging): route scripts and console patch to structured pino logger)
 
 export default router;

@@ -290,7 +290,7 @@ export class RecommendationService {
           try {
             const rep = await ReputationCacheService.getCachedReputation(address);
             return { address, rep };
-          } catch (error) {
+          } catch {
             logger.debug({ address }, "Failed to fetch reputation for client");
             return { address, rep: null };
           }

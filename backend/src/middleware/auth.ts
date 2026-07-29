@@ -1,12 +1,10 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { config } from "../config";
-import { PrismaClient, UserRole } from "@prisma/client";
+import { UserRole } from "@prisma/client";
 import { logger } from "../lib/logger";
 import { getCurrentTokenVersion } from "../lib/token-version";
-import { getCachedUserAuthData } from "../lib/user-cache";
-
-const prisma = new PrismaClient();
+import { getCachedUserAuthData, CachedUserData } from "../lib/user-cache";
 
 export interface AuthRequest extends Request {
   userId?: string;
@@ -14,6 +12,10 @@ export interface AuthRequest extends Request {
   /** walletAddress claim from the JWT, present only when the token was issued
    *  after a successful POST /auth/wallet/verify challenge-response round-trip. */
   userWalletAddress?: string;
+  /** Per-request cache of the authenticated user's auth data, populated by
+   *  authenticate()/optionalAuthenticate() so downstream middleware/handlers
+   *  don't need to re-fetch it. */
+  _cachedUser?: CachedUserData | null;
 }
 
 export const authenticate = async (
@@ -64,7 +66,7 @@ export const authenticate = async (
     }
 
     const user = await getCachedUserAuthData(decoded.userId);
-    (req as any)._cachedUser = user;
+    req._cachedUser = user;
 
     if (!user) {
       res.status(401).json({ error: "User not found." });
@@ -144,7 +146,7 @@ export const requireAdmin = async (
 
     // Query database for user role
     const user = await getCachedUserAuthData(decoded.userId);
-    (req as any)._cachedUser = user;
+    req._cachedUser = user;
 
     if (!user) {
       res.status(401).json({ error: "User not found." });
@@ -219,7 +221,7 @@ export const optionalAuthenticate = async (
     }
 
     const user = await getCachedUserAuthData(decoded.userId);
-    (req as any)._cachedUser = user;
+    req._cachedUser = user;
 
     if (!user || user.deletedAt) {
       return next();
@@ -248,10 +250,10 @@ export const checkSuspension = async (
   }
 
   try {
-    let user = (req as any)._cachedUser;
+    let user = req._cachedUser;
     if (!user) {
       user = await getCachedUserAuthData(req.userId);
-      (req as any)._cachedUser = user;
+      req._cachedUser = user;
     }
 
     if (user && user.isSuspended) {

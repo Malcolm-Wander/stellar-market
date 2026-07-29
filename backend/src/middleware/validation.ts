@@ -13,14 +13,17 @@ export const validate = (schema: {
         req.body = schema.body.parse(req.body);
       }
 
-      // Validate query parameters
+      // Validate query parameters. Zod may coerce values to non-string types
+      // (numbers, booleans), which don't fit Express's string-based ParsedQs
+      // type — route handlers read the coerced shape back out via their own
+      // z.infer<...> casts.
       if (schema.query) {
-        req.query = schema.query.parse(req.query) as any;
+        req.query = schema.query.parse(req.query) as unknown as typeof req.query;
       }
 
       // Validate route parameters
       if (schema.params) {
-        req.params = schema.params.parse(req.params) as any;
+        req.params = schema.params.parse(req.params) as unknown as typeof req.params;
       }
 
       next();
@@ -50,6 +53,7 @@ export const validate = (schema: {
         res.status(400).json({
           code: "VALIDATION_ERROR",
           message: "Validation failed",
+          error: "Validation failed",
           errors,
         });
         return;

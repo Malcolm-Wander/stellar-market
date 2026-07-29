@@ -63,7 +63,7 @@ export async function validateFileMimeType(
       valid: true,
       detectedType,
     };
-  } catch (error) {
+  } catch {
     return {
       valid: false,
       error: "Error validating file type",

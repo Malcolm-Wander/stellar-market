@@ -1,5 +1,6 @@
 import { Router, Response } from "express";
-import { PrismaClient, NotificationType } from "@prisma/client";
+import { PrismaClient, NotificationType, Prisma } from "@prisma/client";
+import { z } from "zod";
 import { authenticate, AuthRequest } from "../middleware/auth";
 import { validate } from "../middleware/validation";
 import { asyncHandler } from "../middleware/error";
@@ -112,7 +113,9 @@ router.get(
   }),
   asyncHandler(async (req: AuthRequest, res: Response) => {
     const jobId = req.params.jobId as string;
-    const { page, limit, status } = req.query as any;
+    const { page, limit, status } = req.query as unknown as z.infer<
+      typeof getApplicationsQuerySchema
+    >;
     const skip = (page - 1) * limit;
 
     const job = await prisma.job.findUnique({
@@ -128,7 +131,7 @@ router.get(
         .json({ error: "Not authorized to view applicants for this job." });
     }
 
-    const where: any = { jobId };
+    const where: Prisma.ApplicationWhereInput = { jobId };
     if (status) {
       where.status = status;
     }
@@ -163,10 +166,12 @@ router.get(
   authenticate,
   validate({ query: getApplicationsQuerySchema }),
   asyncHandler(async (req: AuthRequest, res: Response) => {
-    const { page, limit, jobId, freelancerId, status } = req.query as any;
+    const { page, limit, jobId, freelancerId, status } = req.query as unknown as z.infer<
+      typeof getApplicationsQuerySchema
+    >;
     const skip = (page - 1) * limit;
 
-    const where: any = {};
+    const where: Prisma.ApplicationWhereInput = {};
     if (jobId) where.jobId = jobId;
     if (freelancerId) where.freelancerId = freelancerId;
     if (status) where.status = status;

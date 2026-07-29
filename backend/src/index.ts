@@ -73,8 +73,8 @@ prisma.$use(async (params, next) => {
   try {
     const result = await next(params);
     return result;
-  } catch (err: any) {
-    if (err?.code === "P2024") {
+  } catch (err) {
+    if ((err as { code?: string })?.code === "P2024") {
       poolMetrics.exhaustedCount += 1;
       logger.error(
         { err, model: params.model, action: params.action },

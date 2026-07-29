@@ -481,7 +481,7 @@ async function poll(): Promise<void> {
         const latest = await server.getLatestLedger();
         await setLastIndexedLedger(latest.sequence);
         horizonCB.onSuccess();
-      } catch (_) {
+      } catch {
         horizonCB.onFailure();
       }
     } else {

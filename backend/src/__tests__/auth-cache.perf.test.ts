@@ -12,6 +12,8 @@ jest.mock("../lib/token-version", () => ({
   getCurrentTokenVersion: jest.fn().mockResolvedValue(1),
 }));
 
+type RequestWithCachedUser = Request & { _cachedUser?: unknown };
+
 describe("Auth Middleware Caching", () => {
   let req: Partial<Request>;
   let res: Partial<Response>;
@@ -50,7 +52,7 @@ describe("Auth Middleware Caching", () => {
     
     expect(next).toHaveBeenCalledTimes(1);
     expect(getCachedUserAuthData).toHaveBeenCalledTimes(1);
-    expect((req as any)._cachedUser).toEqual(mockUser);
+    expect((req as RequestWithCachedUser)._cachedUser).toEqual(mockUser);
 
     // Call checkSuspension in the same request chain
     await checkSuspension(req as Request, res as Response, next);

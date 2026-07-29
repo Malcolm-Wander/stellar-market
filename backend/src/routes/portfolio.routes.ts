@@ -151,11 +151,11 @@ router.post(
         ...item,
         sizeFormatted: formatFileSize(item.size),
       });
-    } catch (error: any) {
+    } catch (error) {
       if (req.file && fs.existsSync(req.file.path)) {
         fs.unlinkSync(req.file.path);
       }
-      if (error.code === "LIMIT_FILE_SIZE") {
+      if ((error as { code?: string })?.code === "LIMIT_FILE_SIZE") {
         return res.status(400).json({
           error: `File too large. Maximum size is ${formatFileSize(PORTFOLIO_MAX_FILE_SIZE)}`,
         });

@@ -276,7 +276,7 @@ export class ReputationCacheService {
           if (reputation) {
             await this.cacheReputation(entry.address, reputation);
           }
-        } catch (error) {
+        } catch {
           logger.debug(
             { address: entry.address },
             "Failed to warm cache for address"

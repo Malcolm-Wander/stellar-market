@@ -49,8 +49,8 @@ describe("validate middleware", () => {
     validate({ body: bodySchema })(req, res, next);
 
     expect(status).toHaveBeenCalledWith(400);
-    const body = json.mock.calls[0][0];
-    const fields = body.errors.map((e: any) => e.field);
+    const body = json.mock.calls[0][0] as { errors: Array<{ field: string; message: string }> };
+    const fields = body.errors.map((e) => e.field);
     expect(fields).toContain("title");
     expect(fields).toContain("count");
   });
@@ -63,7 +63,7 @@ describe("validate middleware", () => {
     });
     validate({ body: bodySchema })(req, res, next);
     expect(next).toHaveBeenCalledWith();
-    expect((req.body as any).__extra).toBeUndefined();
+    expect((req.body as { __extra?: unknown }).__extra).toBeUndefined();
   });
 
   it("returns 422 with BudgetBelowMinimum for budget validation", () => {
