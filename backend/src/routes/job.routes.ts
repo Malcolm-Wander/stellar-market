@@ -5,6 +5,7 @@ import { validate } from "../middleware/validation";
 import { asyncHandler } from "../middleware/error";
 import { AppError } from "../errors/AppError";
 import { ErrorCodes } from "../errors/codes";
+import { logger } from "../lib/logger";
 import { RecommendationQueueService } from "../services/recommendation-queue.service";
 import { FraudDetectionService } from "../services/fraud-detection.service";
 import {
@@ -742,9 +743,9 @@ router.get(
         });
         escrowStatus = onChainStatus;
       } catch (error) {
-        console.warn(
+        logger.warn(
+          { err: error, jobId: id },
           `Could not fetch on-chain status for job ${id}, falling back to DB:`,
-          error,
         );
       }
 
@@ -752,7 +753,7 @@ router.get(
         const p = await ContractService.getRevisionProposal(job.contractJobId);
         revisionProposal = p && p.status === "PENDING" ? p : null;
       } catch (error) {
-        console.warn(`Could not fetch revision proposal for job ${id}:`, error);
+        logger.warn({ err: error, jobId: id }, `Could not fetch revision proposal for job ${id}:`);
       }
     }
 

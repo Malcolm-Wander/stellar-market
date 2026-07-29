@@ -2,7 +2,7 @@
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
-    IntoVal, String, Symbol, Vec,
+    IntoVal, Map, String, Symbol, Vec,
 };
 
 #[contracterror]
@@ -814,6 +814,8 @@ impl EscrowContract {
     }
 
     pub fn add_allowed_token(env: Env, admin: Address, token: Address) -> Result<(), EscrowError> {
+        require_not_paused(&env)?;
+
         admin.require_auth();
         if !is_signer(&env, &admin) {
             return Err(EscrowError::NotAdmin);
@@ -1486,6 +1488,13 @@ impl EscrowContract {
 
         client.require_auth();
 
+        // Self-employment escrows (client == freelancer) are not allowed: a user
+        // controlling both addresses could artificially generate review-eligible
+        // jobs. Same guard as `create_job` (issue #988).
+        if client == freelancer {
+            return Err(EscrowError::Unauthorized);
+        }
+
         if job_deadline <= env.ledger().timestamp() {
             return Err(EscrowError::InvalidDeadline);
         }
@@ -1737,6 +1746,7 @@ impl EscrowContract {
     /// - `InvalidStatus`    — job is not Funded or InProgress
     /// - `AlreadyFunded`    — adding `amount` would exceed `total_amount`
     /// - `ContractPaused`   — the contract is paused
+    /// - `InvalidAmount`    — `amount` is zero or negative
     pub fn top_up_escrow(
         env: Env,
         client: Address,
@@ -1747,6 +1757,10 @@ impl EscrowContract {
         require_not_paused(&env)?;
 
         client.require_auth();
+
+        if amount <= 0 {
+            return Err(EscrowError::InvalidAmount);
+        }
 
         let mut job: Job = env
             .storage()
@@ -2130,15 +2144,27 @@ impl EscrowContract {
         // STATE VALIDATION: Cannot approve milestones while disputed
         require_state_not_disputed(&job)?;
 
-        // Validate all milestone indices before making any state changes
+        // Validate all milestone indices before making any state changes.
+        // Duplicate indices are rejected here so a repeated index can't be
+        // counted (and its amount summed into total_released) more than once
+        // while only transitioning to Approved a single time.
         let mut milestones = job.milestones.clone();
         let mut total_released: i128 = 0;
+        let mut seen = [false; MAX_MILESTONES as usize];
 
         for i in milestone_indices.iter() {
             let index = i;
             let milestone = milestones
                 .get(index)
                 .ok_or(EscrowError::MilestoneNotFound)?;
+
+            // Safe: milestones.len() <= MAX_MILESTONES, and the get() above
+            // already confirmed index < milestones.len().
+            let idx = index as usize;
+            if seen[idx] {
+                return Err(EscrowError::InvalidMilestoneIndex);
+            }
+            seen[idx] = true;
 
             if milestone.status != MilestoneStatus::Submitted {
                 return Err(EscrowError::InvalidStatus);
@@ -2535,9 +2561,11 @@ impl EscrowContract {
             .get(&symbol_short!("TRE"))
             .unwrap_or(env.current_contract_address());
 
-        // Pay out each milestone in its own token.
-        let mut total_freelancer: i128 = 0;
-        let mut total_fee: i128 = 0;
+        // Pay out each milestone in its own token and emit per-token events.
+        // Use Map to aggregate amounts by token address.
+        let mut fee_by_token: Map<Address, i128> = Map::new(&env);
+        let mut freelancer_by_token: Map<Address, i128> = Map::new(&env);
+
         for ms in job.milestones.iter() {
             if ms.amount <= 0 {
                 continue;
@@ -2545,6 +2573,7 @@ impl EscrowContract {
             let ms_token = resolve_milestone_token(&ms, &job);
             let fee_amount = (ms.amount * fee_bps as i128) / 10_000;
             let freelancer_amount = ms.amount - fee_amount;
+
             let tc = token::Client::new(&env, &ms_token);
             if fee_amount > 0 {
                 tc.transfer(&env.current_contract_address(), &fee_recipient, &fee_amount);
@@ -2552,26 +2581,60 @@ impl EscrowContract {
             if freelancer_amount > 0 {
                 tc.transfer(&env.current_contract_address(), &job.freelancer, &freelancer_amount);
             }
-            // Accumulate for single-token event emission (best-effort).
-            if ms.token.is_none() {
-                total_fee = total_fee.saturating_add(fee_amount);
-                total_freelancer = total_freelancer.saturating_add(freelancer_amount);
-            }
+
+            // Accumulate amounts per token for event emission.
+            let current_fee = fee_by_token.get(ms_token.clone()).unwrap_or(0);
+            fee_by_token.set(ms_token.clone(), current_fee.saturating_add(fee_amount));
+
+            let current_freelancer = freelancer_by_token.get(ms_token.clone()).unwrap_or(0);
+            freelancer_by_token.set(ms_token.clone(), current_freelancer.saturating_add(freelancer_amount));
         }
 
         job.status = JobStatus::Completed;
         env.storage().persistent().set(&get_job_key(job_id), &job);
         bump_job_ttl(&env, job_id);
 
-        env.events().publish(
-            (symbol_short!("escrow"), Symbol::new(&env, "fee_taken")),
-            (job_id, total_fee, fee_recipient),
-        );
+        // Emit events: maintain backward compatibility for single-token jobs,
+        // use per-token format for multi-token jobs.
+        let num_tokens = fee_by_token.len();
 
-        env.events().publish(
-            (symbol_short!("escrow"), Symbol::new(&env, "pmt_released")),
-            (job_id, job.freelancer, total_freelancer),
-        );
+        if num_tokens == 1 {
+            // Single-token job: use legacy event format (job_id, amount, recipient)
+            let token_addr = fee_by_token.keys().get(0).unwrap();
+            let total_fee = fee_by_token.get(token_addr.clone()).unwrap_or(0);
+            let total_freelancer = freelancer_by_token.get(token_addr.clone()).unwrap_or(0);
+
+            env.events().publish(
+                (symbol_short!("escrow"), Symbol::new(&env, "fee_taken")),
+                (job_id, total_fee, fee_recipient.clone()),
+            );
+
+            env.events().publish(
+                (symbol_short!("escrow"), Symbol::new(&env, "pmt_released")),
+                (job_id, job.freelancer.clone(), total_freelancer),
+            );
+        } else {
+            // Multi-token job: emit per-token events (job_id, token, amount, recipient)
+            for token_addr in fee_by_token.keys() {
+                let fee_amount = fee_by_token.get(token_addr.clone()).unwrap_or(0);
+                if fee_amount > 0 {
+                    env.events().publish(
+                        (symbol_short!("escrow"), Symbol::new(&env, "fee_taken")),
+                        (job_id, token_addr.clone(), fee_amount, fee_recipient.clone()),
+                    );
+                }
+            }
+
+            for token_addr in freelancer_by_token.keys() {
+                let freelancer_amount = freelancer_by_token.get(token_addr.clone()).unwrap_or(0);
+                if freelancer_amount > 0 {
+                    env.events().publish(
+                        (symbol_short!("escrow"), Symbol::new(&env, "pmt_released")),
+                        (job_id, token_addr.clone(), job.freelancer.clone(), freelancer_amount),
+                    );
+                }
+            }
+        }
 
         Ok(())
     }
@@ -3145,6 +3208,24 @@ impl EscrowContract {
         }
         if new_milestones.len() > MAX_MILESTONES {
             return Err(EscrowError::TooManyMilestones);
+        }
+
+        let current_timestamp = env.ledger().timestamp();
+        let mut prev_deadline: u64 = 0;
+        for (i, milestone) in new_milestones.iter().enumerate() {
+            if milestone.amount <= 0 {
+                return Err(EscrowError::InvalidMilestone);
+            }
+            if milestone.deadline <= current_timestamp {
+                return Err(EscrowError::MilestoneDeadlineInPast);
+            }
+            if milestone.deadline > job.job_deadline {
+                return Err(EscrowError::InvalidDeadline);
+            }
+            if i > 0 && milestone.deadline <= prev_deadline {
+                return Err(EscrowError::MilestoneDeadlinesNotOrdered);
+            }
+            prev_deadline = milestone.deadline;
         }
 
         // 5. Compute new_total as the sum of all milestone amounts

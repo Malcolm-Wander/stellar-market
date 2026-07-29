@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from "express";
 import { ZodSchema, ZodError } from "zod";
-import { createError } from "./error";
 
 export const validate = (schema: {
   body?: ZodSchema;
@@ -9,7 +8,7 @@ export const validate = (schema: {
 }) => {
   return (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Validate request body
+      // Validate request body — strip unknown fields by default (zod uses .strip() behavior)
       if (schema.body) {
         req.body = schema.body.parse(req.body);
       }
@@ -27,6 +26,7 @@ export const validate = (schema: {
       next();
     } catch (error) {
       if (error instanceof ZodError) {
+        // Special-case: budget below platform minimum → 422 with dedicated code
         const budgetMinimumError = error.issues.find(
           (issue) =>
             issue.path.length === 1 &&
@@ -34,12 +34,25 @@ export const validate = (schema: {
             issue.message.startsWith("Budget must be at least "),
         );
         if (budgetMinimumError) {
-          return res.status(422).json({
+          res.status(422).json({
             code: "BudgetBelowMinimum",
             message: budgetMinimumError.message,
           });
+          return;
         }
-        return next(createError("Validation failed", 400, error.issues));
+
+        // Standard validation error: return structured {errors: [{field, message}]} array
+        const errors = error.issues.map((issue) => ({
+          field: issue.path.join("."),
+          message: issue.message,
+        }));
+
+        res.status(400).json({
+          code: "VALIDATION_ERROR",
+          message: "Validation failed",
+          errors,
+        });
+        return;
       }
       next(error);
     }

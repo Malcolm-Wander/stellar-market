@@ -46,6 +46,15 @@ router.get(
       return res.status(404).json({ error: "Job not found." });
     }
 
+    const isClient = job.clientId === req.userId;
+    const isFreelancer = job.freelancerId === req.userId;
+
+    if (!isClient && !isFreelancer) {
+      return res
+        .status(403)
+        .json({ error: "Not authorized to view milestones for this job." });
+    }
+
     const milestones = await prisma.milestone.findMany({
       where: { jobId },
       orderBy: { createdAt: "asc" },

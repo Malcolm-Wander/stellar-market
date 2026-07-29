@@ -3649,7 +3649,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "caught panic 'escrow_fail_simulated' from contract function 'Symbol(obj#1733)'"
+                  "string": "caught panic 'escrow_fail_simulated' from contract function 'Symbol(obj#1737)'"
                 },
                 {
                   "u64": 1
