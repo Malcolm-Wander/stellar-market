@@ -1720,6 +1720,55 @@ fn test_cancel_revision_proposal_happy_path() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn test_cancel_revision_proposal_fails_when_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
+    let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
+    let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
+    let new_milestones = vec![
+        &env,
+        Milestone {
+            id: 0,
+            description: String::from_str(&env, "Revised"),
+            amount: 1200,
+            status: MilestoneStatus::Pending,
+            deadline: JOB_DEADLINE,
+                token: None,
+        },
+    ];
+    contract.propose_revision(&client, &job_id, &new_milestones);
+    pause_escrow(&env, &contract, &admin);
+    contract.cancel_revision_proposal(&client, &job_id);
+}
+
+#[test]
+fn test_cancel_revision_proposal_succeeds_after_unpause() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, client, freelancer, token, admin) = setup_test(&env);
+    let milestones = vec![&env, (String::from_str(&env, "Initial"), 1000_i128, JOB_DEADLINE)];
+    let job_id = contract.create_job(&client, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
+    let new_milestones = vec![
+        &env,
+        Milestone {
+            id: 0,
+            description: String::from_str(&env, "Revised"),
+            amount: 1200,
+            status: MilestoneStatus::Pending,
+            deadline: JOB_DEADLINE,
+                token: None,
+        },
+    ];
+    contract.propose_revision(&client, &job_id, &new_milestones);
+    pause_escrow(&env, &contract, &admin);
+    unpause_escrow(&env, &contract, &admin);
+    contract.cancel_revision_proposal(&client, &job_id);
+    assert!(contract.get_revision_proposal(&job_id).is_none());
+}
+
+#[test]
 fn test_freelancer_can_cancel_own_revision_proposal() {
     let env = Env::default();
     env.mock_all_auths();
@@ -5038,6 +5087,62 @@ fn test_expire_proposal_success() {
     contract.expire_proposal(&client_addr, &job_id);
 
     // Verify proposal is now Rejected
+    let proposal = contract.get_revision_proposal(&job_id).unwrap();
+    assert_eq!(proposal.status, ProposalStatus::Rejected);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn test_expire_proposal_fails_when_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let (contract, client_addr, freelancer, token, admin) = setup_test(&env);
+    let milestones = vec![&env, (String::from_str(&env, "M1"), 500_i128, JOB_DEADLINE)];
+    let job_id = contract.create_job(&client_addr, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
+    let new_milestones = vec![
+        &env,
+        Milestone {
+            id: 0,
+            description: String::from_str(&env, "Revised"),
+            amount: 600,
+            status: MilestoneStatus::Pending,
+            deadline: JOB_DEADLINE,
+                token: None,
+        },
+    ];
+    contract.propose_revision(&client_addr, &job_id, &new_milestones);
+    env.ledger().with_mut(|l| l.timestamp += 604800 + 1);
+    pause_escrow(&env, &contract, &admin);
+    contract.expire_proposal(&client_addr, &job_id);
+}
+
+#[test]
+fn test_expire_proposal_succeeds_after_unpause() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().with_mut(|l| l.timestamp = 1000);
+    let (contract, client_addr, freelancer, token, admin) = setup_test(&env);
+    let milestones = vec![&env, (String::from_str(&env, "M1"), 500_i128, JOB_DEADLINE)];
+    let job_id = contract.create_job(&client_addr, &freelancer, &token, &milestones, &JOB_DEADLINE, &GRACE_PERIOD, &DEFAULT_EXPIRY_LEDGER);
+    contract.fund_job(&job_id, &client_addr, &0, &0);
+    let new_milestones = vec![
+        &env,
+        Milestone {
+            id: 0,
+            description: String::from_str(&env, "Revised"),
+            amount: 600,
+            status: MilestoneStatus::Pending,
+            deadline: JOB_DEADLINE,
+                token: None,
+        },
+    ];
+    contract.propose_revision(&client_addr, &job_id, &new_milestones);
+    env.ledger().with_mut(|l| l.timestamp += 604800 + 1);
+    pause_escrow(&env, &contract, &admin);
+    unpause_escrow(&env, &contract, &admin);
+    contract.expire_proposal(&client_addr, &job_id);
     let proposal = contract.get_revision_proposal(&job_id).unwrap();
     assert_eq!(proposal.status, ProposalStatus::Rejected);
 }

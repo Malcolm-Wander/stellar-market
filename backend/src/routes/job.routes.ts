@@ -344,7 +344,7 @@ router.get(
     });
 
     const { data, hit } = await cache(cacheKey, 30, async () => {
-      const where: Prisma.JobWhereInput = {};
+      const where: Prisma.JobWhereInput = { deletedAt: null };
 
       // Full-text search using PostgreSQL tsvector/tsquery with relevance ranking.
       // Falls back to Prisma contains (LIKE) if raw query fails.
